@@ -340,6 +340,11 @@ class CodeEditor(QPlainTextEdit):
 
     def keyPressEvent(self, event):
         key = event.key()
+        if key == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            cursor = self.textCursor()
+            cursor.insertText("    ")
+            self.setTextCursor(cursor)
+            return
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self.lists_enabled and self._continue_block():
                 return

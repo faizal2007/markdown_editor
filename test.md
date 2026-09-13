@@ -8,3 +8,20 @@
 |-------|-----|-------|
 | Alice | 25  | New York |
 | Bob   | 30  | London   |
+
+
+```mermaid
+erDiagram
+  User ||--o{ Order : "places"
+  Order ||--|| Item : "contains"
+  User {
+    int id PK
+    string name
+  }
+  Order {
+    int order_id PK
+  }
+ Item {
+    int item_id PK
+}  
+```

@@ -22,6 +22,15 @@ h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
       mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', suppressErrorRendering: true });
       var nodes = el.querySelectorAll('pre.mermaid, code.language-mermaid, code.mermaid');
       var seq = window.mermaidRender.seq = (window.mermaidRender.seq || 0) + 1;
+      var gen = window.mermaidRender.gen = (window.mermaidRender.gen || 0) + 1;
+      var pending = nodes.length;
+      var failed = false;
+      function done() {
+        pending -= 1;
+        if (pending <= 0 && gen === window.mermaidRender.gen) {
+          el.dataset.mermaidState = failed ? 'error' : 'ok';
+        }
+      }
       Array.prototype.forEach.call(nodes, function (n, i) {
         var src = n.textContent;
         var id = 'mmd' + (seq + i);
@@ -32,8 +41,16 @@ h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
             holder.innerHTML = r.svg;
             n.replaceWith(holder);
           }
-        }).catch(function (err) { console.error('mermaid', err); });
+          done();
+        }).catch(function (err) {
+          failed = true;
+          done();
+          console.error('mermaid', err);
+        });
       });
+      if (pending === 0) {
+        el.dataset.mermaidState = gen === window.mermaidRender.gen ? 'ok' : 'none';
+      }
     } catch (e) { console.error('mermaid', e); }
   };
 </script>

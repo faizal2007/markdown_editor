@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -57,6 +58,7 @@ FC_ARROWS = ["-->", "---", "-.->", "--x", "--o"]
 SEQ_ARROWS = ["->>", "->", "-)", "-->>", "-->", "--x", "--)", "-x"]
 CLASS_RELS = ["<|--", "<--", "--o", "--*", "--", "o--", "*--", "..>"]
 ER_RELS = ["||--o{", "||--||", "|o--||", "}o--||", "||--|{", "|o--o|"]
+ER_KEYS = ["", "PK", "FK", "UK"]
 
 
 def _shape_wrap(kind, label):
@@ -141,14 +143,28 @@ def gen_class(options, rows):
     return "\n".join(lines)
 
 
-def gen_er(options, rows):
+def gen_er(options, rel_rows, attr_rows=None):
+    attr_rows = attr_rows or []
     lines = ["erDiagram"]
-    for a, rel, b, label in ((r + [""] * 4)[:4] for r in rows):
+    for a, rel, b, label in ((r + [""] * 4)[:4] for r in rel_rows):
+        if not a.strip() or not b.strip():
+            continue
         line = "  %s %s %s" % (a.strip(), rel, b.strip())
         if label.strip():
             line += ' : "%s"' % label
-        if a.strip() and b.strip():
-            lines.append(line)
+        else:
+            line += ' : " "'
+        lines.append(line)
+    entities = {}
+    for ent, attr, typ, key in ((r + [""] * 4)[:4] for r in attr_rows):
+        if not ent.strip() or not attr.strip():
+            continue
+        entities.setdefault(ent.strip(), []).append((typ.strip(), attr.strip(), key.strip().upper()))
+    for ent, attrs in entities.items():
+        lines.append("  %s {" % ent)
+        for typ, attr, key in attrs:
+            lines.append("    " + " ".join(p for p in (typ, attr, key) if p))
+        lines.append("  }")
     return "\n".join(lines)
 
 
@@ -232,16 +248,36 @@ SCHEMAS = {
     },
     "ER": {
         "options": [],
-        "cols": [
-            ("Entity A", "text", ""),
-            ("Relationship", "errel", "||--o{"),
-            ("Entity B", "text", ""),
-            ("Label", "text", ""),
-        ],
-        "default_rows": 2,
-        "example": [
-            ["User", "||--o{", "Order", "places"],
-            ["Order", "||--||", "Item", "contains"],
+        "tables": [
+            {
+                "title": "Relationships",
+                "cols": [
+                    ("Entity A", "text", ""),
+                    ("Relationship", "errel", "||--o{"),
+                    ("Entity B", "text", ""),
+                    ("Label", "text", ""),
+                ],
+                "default_rows": 2,
+                "example": [
+                    ["User", "||--o{", "Order", "places"],
+                    ["Order", "||--||", "Item", "contains"],
+                ],
+            },
+            {
+                "title": "Entity attributes",
+                "cols": [
+                    ("Entity", "text", ""),
+                    ("Attribute", "text", ""),
+                    ("Type", "text", ""),
+                    ("Key", "erkey", ""),
+                ],
+                "default_rows": 3,
+                "example": [
+                    ["User", "id", "int", "PK"],
+                    ["User", "name", "string", ""],
+                    ["Order", "order_id", "int", "PK"],
+                ],
+            },
         ],
         "gen": gen_er,
     },
@@ -282,6 +318,7 @@ CHOICES = {
     "seqarrow": SEQ_ARROWS,
     "classrel": CLASS_RELS,
     "errel": ER_RELS,
+    "erkey": ER_KEYS,
 }
 
 
@@ -307,7 +344,7 @@ class MermaidWizardDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Mermaid Diagram Wizard")
-        self.resize(880, 560)
+        self.resize(880, 640)
         self._building = False
         self.generated_source = ""
 
@@ -325,25 +362,24 @@ class MermaidWizardDialog(QDialog):
         self.options_layout.setContentsMargins(0, 0, 0, 4)
         root.addWidget(self.options_box)
 
-        self.table = QTableWidget()
-        self.table.verticalHeader().setVisible(False)
-        root.addWidget(self.table, 1)
-
-        row_btns = QHBoxLayout()
-        self.add_btn = QPushButton("Add Row")
-        self.remove_btn = QPushButton("Remove Row")
-        row_btns.addWidget(self.add_btn)
-        row_btns.addWidget(self.remove_btn)
-        row_btns.addStretch(1)
-        root.addLayout(row_btns)
+        self.sections_box = QWidget()
+        self.sections_layout = QVBoxLayout(self.sections_box)
+        self.sections_layout.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self.sections_box, 1)
 
         mid = QHBoxLayout()
         self.code_box = QPlainTextEdit()
         self.code_box.setReadOnly(True)
         self.code_box.setPlaceholderText("Generated mermaid source appears here...")
         self.preview_view = QWebEngineView()
+        self.state_label = QLabel("")
+        self.state_label.setStyleSheet("color: #c0392b;")
+        self.state_label.hide()
+        preview_col = QVBoxLayout()
+        preview_col.addWidget(self.preview_view, 1)
+        preview_col.addWidget(self.state_label)
         mid.addWidget(self.code_box, 1)
-        mid.addWidget(self.preview_view, 2)
+        mid.addLayout(preview_col, 2)
         root.addLayout(mid, 2)
 
         buttons = QDialogButtonBox(
@@ -355,10 +391,6 @@ class MermaidWizardDialog(QDialog):
         root.addWidget(buttons)
 
         self.type_combo.currentTextChanged.connect(self._rebuild_form)
-        self.add_btn.clicked.connect(self._add_row)
-        self.remove_btn.clicked.connect(self._remove_row)
-        self.table.itemChanged.connect(self._on_changed)
-        self.table.cellChanged.connect(self._on_changed)
 
         self.render_timer = QTimer(self)
         self.render_timer.setSingleShot(True)
@@ -399,16 +431,51 @@ class MermaidWizardDialog(QDialog):
                 self.options_layout.addWidget(le)
         self.options_layout.addStretch(1)
 
-        cols = schema["cols"]
-        self.table.clear()
-        self.table.setColumnCount(len(cols))
-        self.table.setRowCount(0)
-        self.table.setHorizontalHeaderLabels([c[0] for c in cols])
-        example = schema.get("example") or []
-        total_rows = max(schema.get("default_rows", 2), len(example))
-        for i in range(total_rows):
-            self._add_row(example[i] if i < len(example) else None)
-        self.table.resizeColumnsToContents()
+        while self.sections_layout.count():
+            item = self.sections_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        schema = self._current_schema()
+        self.sections = []
+        tables = schema.get("tables") or [
+            {
+                "title": "",
+                "cols": schema["cols"],
+                "default_rows": schema.get("default_rows", 2),
+                "example": schema.get("example") or [],
+            }
+        ]
+        for tspec in tables:
+            group = QGroupBox(tspec.get("title", ""))
+            lay = QVBoxLayout(group)
+            tbl = QTableWidget()
+            tbl.verticalHeader().setVisible(False)
+            tbl.clear()
+            tbl.setColumnCount(len(tspec["cols"]))
+            tbl.setRowCount(0)
+            tbl.setHorizontalHeaderLabels([c[0] for c in tspec["cols"]])
+            tbl.itemChanged.connect(self._on_changed)
+            tbl.cellChanged.connect(self._on_changed)
+            hb = QHBoxLayout()
+            add_btn = QPushButton("Add Row")
+            remove_btn = QPushButton("Remove Row")
+            add_btn.clicked.connect(lambda _=False, t=tbl, s=tspec: self._add_row(t, s))
+            remove_btn.clicked.connect(lambda _=False, t=tbl: self._remove_row(t))
+            hb.addWidget(add_btn)
+            hb.addWidget(remove_btn)
+            hb.addStretch(1)
+            lay.addWidget(tbl)
+            lay.addLayout(hb)
+            self.sections_layout.addWidget(group)
+            example = tspec.get("example") or []
+            total_rows = max(tspec.get("default_rows", 2), len(example))
+            for i in range(total_rows):
+                self._add_row(tbl, tspec, example[i] if i < len(example) else None)
+            tbl.resizeColumnsToContents()
+            self.sections.append({"table": tbl, "spec": tspec})
+        self.sections_layout.addStretch(1)
         self._building = False
         self._render()
 
@@ -419,37 +486,36 @@ class MermaidWizardDialog(QDialog):
         le.textChanged.connect(self._on_changed)
         return le
 
-    def _add_row(self, values=None):
-        schema = self._current_schema()
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        for col, (_, kind, default) in enumerate(schema["cols"]):
+    def _add_row(self, table, spec, values=None):
+        row = table.rowCount()
+        table.insertRow(row)
+        for col, (_, kind, default) in enumerate(spec["cols"]):
             val = values[col] if values and col < len(values) else default
             if kind in CHOICES:
                 cb = QComboBox()
                 cb.addItems(CHOICES[kind])
                 cb.setCurrentText(val)
                 cb.currentIndexChanged.connect(self._on_changed)
-                self.table.setCellWidget(row, col, cb)
+                table.setCellWidget(row, col, cb)
             else:
                 item = QTableWidgetItem(val)
-                self.table.setItem(row, col, item)
+                table.setItem(row, col, item)
 
-    def _remove_row(self):
-        if self.table.rowCount() > 1:
-            self.table.removeRow(self.table.currentRow() if self.table.currentRow() >= 0 else self.table.rowCount() - 1)
+    def _remove_row(self, table):
+        if table.rowCount() > 1:
+            table.removeRow(table.currentRow() if table.currentRow() >= 0 else table.rowCount() - 1)
             self._on_changed()
 
-    def _collect_rows(self):
+    def _collect_rows(self, table):
         rows = []
-        for r in range(self.table.rowCount()):
+        for r in range(table.rowCount()):
             row = []
-            for c in range(self.table.columnCount()):
-                w = self.table.cellWidget(r, c)
+            for c in range(table.columnCount()):
+                w = table.cellWidget(r, c)
                 if isinstance(w, QComboBox):
                     row.append(w.currentText())
                 else:
-                    item = self.table.item(r, c)
+                    item = table.item(r, c)
                     row.append(item.text() if item else "")
             rows.append(row)
         return rows
@@ -462,7 +528,8 @@ class MermaidWizardDialog(QDialog):
                 options[name] = w.currentText()
             else:
                 options[name] = w.text()
-        return schema["gen"](options, self._collect_rows())
+        row_sets = [self._collect_rows(sec["table"]) for sec in self.sections]
+        return schema["gen"](options, *row_sets)
 
     def _on_changed(self, *_):
         if not self._building:
@@ -474,6 +541,26 @@ class MermaidWizardDialog(QDialog):
         if self.code_box.toPlainText() != source:
             self.code_box.setPlainText(source)
         push_html(self.preview_view, mermaid_fragment(source))
+        self._check_render_state(12)
+
+    def _check_render_state(self, tries):
+        if not self.preview_view.page():
+            return
+
+        def on_state(state, tries=tries):
+            if state == "ok":
+                self.state_label.hide()
+            elif state == "error":
+                self.state_label.setText(
+                    "Could not render this diagram. Check entity names (no spaces, commas or slashes) and relationship labels."
+                )
+                self.state_label.show()
+            elif tries > 0:
+                QTimer.singleShot(400, lambda: self._check_render_state(tries - 1))
+
+        self.preview_view.page().runJavaScript(
+            "document.getElementById('content').dataset.mermaidState || 'none'", on_state
+        )
 
     def _on_accept(self):
         self.generated_source = self.build_mermaid()
