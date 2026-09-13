@@ -338,6 +338,30 @@ class CodeEditor(QPlainTextEdit):
         self.lists_enabled = True
         self.smart_enabled = True
 
+    def replace_mermaid_diagram(self, index, new_source):
+        text = self.toPlainText()
+        re_block = re.compile(r"(```[ \t]*[\w-]*[ \t]*\n)(.*?)(\n```)", re.DOTALL)
+        from mermaid_wizard import MERMAID_HEADS
+
+        seen = 0
+        for m in re_block.finditer(text):
+            content = m.group(2).lstrip("\n")
+            first = content.lstrip().split(None, 1)
+            lang = m.group(1)
+            is_mermaid = "mermaid" in lang.lower() or (
+                first and first[0].rstrip("`").strip() in MERMAID_HEADS
+            )
+            if not is_mermaid:
+                continue
+            seen += 1
+            if seen == index:
+                cursor = self.textCursor()
+                cursor.setPosition(m.start())
+                cursor.setPosition(m.end(), cursor.MoveMode.KeepAnchor)
+                cursor.insertText(m.group(1) + new_source.rstrip() + m.group(3))
+                return True
+        return False
+
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key.Key_Tab and event.modifiers() == Qt.KeyboardModifier.NoModifier:

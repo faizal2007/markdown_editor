@@ -1,9 +1,10 @@
 import html
 import json
+import re
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer, QUrl
+from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -198,6 +199,273 @@ def gen_gantt(options, rows):
     return "\n".join(lines)
 
 
+_FC_WRAPS = [
+    ("(((", ")))", "Circle"),
+    ("[(", ")]", "Cylinder"),
+    ("[[", "]]", "Subroutine"),
+    ("[/", "/]", "Parallelogram"),
+    ("{{", "}}", "Hexagon"),
+    ("(", ")", "Rounded"),
+    ("[", "]", "Rectangle"),
+    ("{", "}", "Diamond"),
+]
+
+
+def _fc_shape_decode(text):
+    text = text.strip()
+    for pre, suf, kind in _FC_WRAPS:
+        if text.startswith(pre) and text.endswith(suf):
+            inner = text[len(pre) : len(text) - len(suf)]
+            if inner.strip():
+                return inner.strip(), kind
+    return text, "None"
+
+
+def _parse_flowchart(head, lines):
+    direction = (head[1] if len(head) > 1 else "TB").upper()
+    if direction == "TD":
+        direction = "TB"
+    options = {"Direction": direction}
+    rows = []
+    for line in lines[1:]:
+        s = line.strip()
+        if not s or s.startswith(
+            ("subgraph", "end", "style", "linkStyle", "classDef", "click", "direction")
+        ):
+            continue
+        for arrow in sorted(FC_ARROWS, key=len, reverse=True):
+            idx = s.find(arrow)
+            if idx <= 0:
+                continue
+            from_part = s[:idx].strip()
+            rest = s[idx + len(arrow) :].strip()
+            label = ""
+            if rest.startswith("|"):
+                label, _, rest = rest[1:].partition("|")
+                rest = rest.strip()
+            if not from_part or not rest:
+                continue
+            fname, fshape = _fc_shape_decode(from_part)
+            tname, tshape = _fc_shape_decode(rest)
+            rows.append([fname, fshape, arrow, label, tname, tshape])
+            break
+    return "Flowchart", options, [rows]
+
+
+def _parse_sequence(lines):
+    options = {}
+    mapping = {}
+    rows = []
+    for line in lines[1:]:
+        s = line.strip()
+        if s.startswith("participant"):
+            m = re.match(r"^participant\s+(\S+)\s+as\s+(.*)$", s)
+            if m:
+                mapping[m.group(1)] = m.group(2).strip()
+            continue
+        skip = (
+            "Note",
+            "actor",
+            "autoactivate",
+            "loop",
+            "alt",
+            "else",
+            "opt",
+            "par",
+            "rect",
+            "end",
+            "activate",
+            "deactivate",
+            "title",
+            "box",
+            "critical",
+        )
+        if not s or s.startswith(skip):
+            continue
+        found = False
+        for arrow in sorted(SEQ_ARROWS, key=len, reverse=True):
+            for prefix in ("", "+", "-"):
+                tok = prefix + arrow
+                idx = s.find(tok)
+                if idx <= 0:
+                    continue
+                f = s[:idx].strip()
+                rest = s[idx + len(tok) :].strip()
+                if ":" in rest:
+                    t, _, text = rest.partition(":")
+                else:
+                    t, text = rest, ""
+                if f and t:
+                    rows.append(
+                        [mapping.get(f, f), arrow, text.strip(), mapping.get(t, t)]
+                    )
+                found = True
+                break
+            if found:
+                break
+    return "Sequence", options, [rows]
+
+
+def _parse_class(lines):
+    options = {}
+    rows = []
+    for line in lines[1:]:
+        s = line.strip()
+        skip = (
+            "class",
+            "namespace",
+            "annotation",
+            "note",
+            "link",
+            "click",
+            "style",
+            "end",
+            "direction",
+        )
+        if not s or s.startswith(skip):
+            continue
+        for rel in sorted(CLASS_RELS, key=len, reverse=True):
+            idx = s.find(rel)
+            if idx <= 0:
+                continue
+            f = s[:idx].strip()
+            rest = s[idx + len(rel) :].strip()
+            if ":" in rest:
+                t, _, label = rest.partition(":")
+            else:
+                t, label = rest, ""
+            if f and t:
+                rows.append([f, rel, t.strip(), label.strip()])
+            break
+    return "Class", options, [rows]
+
+
+def _parse_er(lines):
+    options = {}
+    rel_rows = []
+    attr_rows = []
+    i = 1
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s:
+            i += 1
+            continue
+        has_rel = any(rel in s for rel in ER_RELS)
+        if "{" in s and not has_rel:
+            entity = s[: s.index("{")].strip()
+            block = s[s.index("{") + 1 :]
+            while "}" not in block:
+                i += 1
+                if i >= len(lines):
+                    break
+                nxt = lines[i]
+                if "}" in nxt:
+                    block += " " + nxt.split("}")[0]
+                    break
+                block += " " + nxt
+            if "}" in block:
+                block = block.split("}")[0]
+            tokens = block.split()
+            j = 0
+            while j + 1 < len(tokens):
+                typ = tokens[j]
+                name = tokens[j + 1]
+                key = ""
+                if (
+                    j + 2 < len(tokens)
+                    and tokens[j + 2].upper() in ("PK", "FK", "UK")
+                ):
+                    key = tokens[j + 2].upper()
+                    j += 3
+                else:
+                    j += 2
+                if entity and name:
+                    attr_rows.append([entity, name, typ, key])
+            i += 1
+            continue
+        for rel in sorted(ER_RELS, key=len, reverse=True):
+            idx = s.find(rel)
+            if idx <= 0:
+                continue
+            f = s[:idx].strip()
+            rest = s[idx + len(rel) :].strip()
+            if ":" in rest:
+                t, _, label = rest.partition(":")
+            else:
+                t, label = rest, ""
+            rel_rows.append([f, rel, t.strip(), label.strip().strip('"')])
+            break
+        i += 1
+    return "ER", options, [rel_rows, attr_rows]
+
+
+def _parse_pie(lines):
+    options = {}
+    rows = []
+    for line in lines:
+        s = line.strip()
+        if s.startswith("pie"):
+            parts = s.split(None, 2)
+            if len(parts) >= 3 and parts[1].lower() == "title":
+                options["Title"] = parts[2]
+            continue
+        m = re.match(r'"([^"]+)"\s*:\s*(.*)', s)
+        if m:
+            rows.append([m.group(1), m.group(2).strip()])
+    return "Pie", options, [rows]
+
+
+def _parse_gantt(lines):
+    options = {}
+    rows = []
+    section = ""
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith(("gantt", "excludes", "includes", "axisFormat", "todayMarker")):
+            continue
+        if s.lower().startswith("dateformat"):
+            options["Date format"] = s.split(None, 1)[1].strip()
+            continue
+        if s.startswith("title"):
+            options["Title"] = s.split(None, 1)[1].strip()
+            continue
+        if s.lower().startswith("section "):
+            section = s.split(None, 1)[1].strip()
+            continue
+        if ":" in s:
+            task, _, rest = s.partition(":")
+            parts = [p.strip() for p in rest.split(",")]
+            start = parts[1] if len(parts) > 1 else ""
+            dur = parts[2] if len(parts) > 2 else ""
+            rows.append([section, task.strip(), start, dur])
+        else:
+            rows.append([section, s, "", ""])
+    return "Gantt", options, [rows]
+
+
+def parse_mermaid_wizard(source):
+    lines = source.strip().splitlines()
+    if not lines:
+        return None
+    heads = lines[0].strip().split(None, 1)
+    if not heads:
+        return None
+    kind = heads[0]
+    if kind in ("flowchart", "graph"):
+        return _parse_flowchart(lines[0].split(), lines)
+    if kind == "sequenceDiagram":
+        return _parse_sequence(lines)
+    if kind == "classDiagram":
+        return _parse_class(lines)
+    if kind == "erDiagram":
+        return _parse_er(lines)
+    if kind == "pie":
+        return _parse_pie(lines)
+    if kind == "gantt":
+        return _parse_gantt(lines)
+    return None
+
+
 SCHEMAS = {
     "Flowchart": {
         "options": [("Direction", "combo", ["TB", "LR", "BT", "RL"], "TB")],
@@ -332,12 +600,51 @@ def load_web_page(view):
 
 
 def push_html(view, fragment):
-    js = "window.mermaidRender(%s);" % json.dumps(fragment)
+    js = (
+        "if (window.mermaidRender) { window.mermaidRender(%s); }"
+        " else { document.body.setAttribute('data-pending-html', %s); }"
+        % (json.dumps(fragment), json.dumps(fragment))
+    )
     view.page().runJavaScript(js)
 
 
 def mermaid_fragment(source):
     return '<pre class="mermaid">' + html.escape(source) + "</pre>"
+
+
+class MdbBridge(QObject):
+    editRequested = pyqtSignal(int, str)
+
+    @pyqtSlot(int, str)
+    def editMermaid(self, index, source):
+        self.editRequested.emit(index, source)
+
+
+class MermaidEditDialog(QDialog):
+    def __init__(self, source, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Mermaid Diagram")
+        self.resize(640, 420)
+        layout = QVBoxLayout(self)
+        editor = QPlainTextEdit()
+        from PyQt6.QtGui import QFontDatabase
+
+        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        font.setPointSize(11)
+        editor.setFont(font)
+        editor.setPlainText(source)
+        layout.addWidget(editor, 1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._editor = editor
+
+    def edited_source(self):
+        return self._editor.toPlainText()
 
 
 class MermaidWizardDialog(QDialog):
@@ -520,6 +827,33 @@ class MermaidWizardDialog(QDialog):
             rows.append(row)
         return rows
 
+    def set_source(self, source):
+        parsed = parse_mermaid_wizard(source)
+        if not parsed:
+            return False
+        diagram_type, options, rows_list = parsed
+        self.type_combo.blockSignals(True)
+        self.type_combo.setCurrentText(diagram_type)
+        self.type_combo.blockSignals(False)
+        self._rebuild_form(diagram_type)
+        for name, val in options.items():
+            w = self.option_widgets.get(name)
+            if w:
+                if hasattr(w, "setCurrentText"):
+                    w.setCurrentText(str(val))
+                elif hasattr(w, "setText"):
+                    w.setText(str(val))
+        for sec, table_rows in zip(self.sections, rows_list):
+            tbl = sec["table"]
+            spec = sec["spec"]
+            while tbl.rowCount():
+                tbl.removeRow(tbl.rowCount() - 1)
+            for row_data in table_rows:
+                self._add_row(tbl, spec, row_data)
+            tbl.resizeColumnsToContents()
+        self._on_changed()
+        return True
+
     def build_mermaid(self):
         schema = self._current_schema()
         options = {}
@@ -559,7 +893,9 @@ class MermaidWizardDialog(QDialog):
                 QTimer.singleShot(400, lambda: self._check_render_state(tries - 1))
 
         self.preview_view.page().runJavaScript(
-            "document.getElementById('content').dataset.mermaidState || 'none'", on_state
+            "(function(){var el=document.getElementById('content');"
+            "return el ? (el.dataset.mermaidState || 'none') : 'none';})()",
+            on_state,
         )
 
     def _on_accept(self):
