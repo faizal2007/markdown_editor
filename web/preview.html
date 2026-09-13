@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { font-family: "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; margin: 12px; color: #1a1a1a; }
+pre { margin: 0; padding: 0; border-radius: 4px; }
+code { background: #f4f4f4; padding: 1px 4px; border-radius: 3px; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 4px solid #ccc; margin: 0; padding-left: 14px; color: #666; }
+table { border-collapse: collapse; }
+th, td { border: 1px solid #ccc; padding: 6px 12px; }
+a { color: #0366d6; }
+h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
+</style>
+<script src="mermaid.min.js"></script>
+<script>
+  window.mermaidRender = function (html) {
+    var el = document.getElementById('content');
+    el.innerHTML = html;
+    try {
+      mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', suppressErrorRendering: true });
+      var nodes = el.querySelectorAll('pre.mermaid, code.language-mermaid, code.mermaid');
+      var seq = window.mermaidRender.seq = (window.mermaidRender.seq || 0) + 1;
+      Array.prototype.forEach.call(nodes, function (n, i) {
+        var src = n.textContent;
+        var id = 'mmd' + (seq + i);
+        mermaid.render(id, src).then(function (r) {
+          if (n.isConnected) {
+            var holder = document.createElement('div');
+            holder.id = id;
+            holder.innerHTML = r.svg;
+            n.replaceWith(holder);
+          }
+        }).catch(function (err) { console.error('mermaid', err); });
+      });
+    } catch (e) { console.error('mermaid', e); }
+  };
+</script>
+</head>
+<body>
+<div id="content"></div>
+</body>
+</html>

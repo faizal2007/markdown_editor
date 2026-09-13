@@ -518,6 +518,50 @@ class CodeEditor(QPlainTextEdit):
         cursor.insertText("\n".join(lines))
         cursor.endEditBlock()
 
+    def insert_mermaid(self, source):
+        cursor = self.textCursor()
+        offset = 0
+        if cursor.hasSelection():
+            start = cursor.selectionStart()
+        else:
+            start = cursor.position()
+        if start != cursor.block().position():
+            offset = 1
+        block = "```mermaid\n" + source.rstrip("\n") + "\n```"
+        cursor.beginEditBlock()
+        if offset:
+            cursor.setPosition(start)
+            cursor.insertText("\n")
+        cursor.insertText(block)
+        pos = start + offset + len("```mermaid\n")
+        cursor.setPosition(pos)
+        cursor.endEditBlock()
+        self.setTextCursor(cursor)
+
+    def insert_table(self, cols=3, rows=2):
+        cursor = self.textCursor()
+        header = "| " + " | ".join("Column {}".format(i + 1) for i in range(cols)) + " |"
+        divider = "| " + " | ".join(["---"] * cols) + " |"
+        body = "\n".join("| " + " | ".join(["Cell"] * cols) + " |" for _ in range(rows))
+        table = header + "\n" + divider + "\n" + body
+        offset = 0
+        if cursor.hasSelection():
+            start = cursor.selectionStart()
+        else:
+            start = cursor.position()
+        if start != cursor.block().position():
+            table = "\n" + table
+            offset = 1
+        cursor.beginEditBlock()
+        cursor.setPosition(start)
+        cursor.insertText(table)
+        first_cell_start = start + offset + 2
+        first_cell_end = first_cell_start + len("Column 1")
+        cursor.setPosition(first_cell_start)
+        cursor.setPosition(first_cell_end, QTextCursor.MoveMode.KeepAnchor)
+        cursor.endEditBlock()
+        self.setTextCursor(cursor)
+
     def insert_fence_block(self):
         cursor = self.textCursor()
         cursor.beginEditBlock()

@@ -1,8 +1,9 @@
+import json
 import re
 import sys
 
 import markdown
-from PyQt6.QtCore import QSettings, QSize, Qt, QTimer
+from PyQt6.QtCore import QPointF, QRectF, QSettings, QSize, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -10,6 +11,7 @@ from PyQt6.QtGui import (
     QIcon,
     QKeySequence,
     QPainter,
+    QPen,
     QPixmap,
     QTextCursor,
 )
@@ -21,13 +23,19 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QStyle,
     QTabWidget,
-    QTextBrowser,
     QToolBar,
     QVBoxLayout,
     QWidget,
 )
+from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from markdown_edit import CodeEditor, MarkdownHighlighter
+from mermaid_wizard import (
+    MERMAID_HEADS,
+    MermaidWizardDialog,
+    load_web_page,
+    push_html,
+)
 
 
 def make_text_icon(symbol, bold=False, italic=False, mono=False):
@@ -45,26 +53,49 @@ def make_text_icon(symbol, bold=False, italic=False, mono=False):
     p.end()
     return QIcon(pm)
 
-STYLE_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-body { font-family: "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; }
-pre { margin: 0; padding: 0; border-radius: 4px; }
-code { background: #f4f4f4; padding: 1px 4px; border-radius: 3px; }
-pre code { background: none; padding: 0; }
-blockquote { border-left: 4px solid #ccc; margin: 0; padding-left: 14px; color: #666; }
-table { border-collapse: collapse; }
-th, td { border: 1px solid #ccc; padding: 6px 12px; }
-</style>
-</head>
-<body>
-__CONTENT__
-</body>
-</html>
-"""
+
+def make_table_icon():
+    pm = QPixmap(28, 28)
+    pm.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    rect = QRectF(4, 5, 20, 18)
+    x1 = rect.x() + rect.width() / 3
+    x2 = rect.x() + 2 * rect.width() / 3
+    y1 = rect.y() + rect.height() / 3
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor("#cbd5e1"))
+    p.drawRect(QRectF(rect.x(), rect.y(), rect.width(), rect.height() / 3))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    pen = QPen(QColor("#333333"))
+    pen.setWidth(2)
+    p.setPen(pen)
+    p.drawRect(rect)
+    p.drawLine(QPointF(x1, rect.y()), QPointF(x1, rect.bottom()))
+    p.drawLine(QPointF(x2, rect.y()), QPointF(x2, rect.bottom()))
+    p.drawLine(QPointF(rect.x(), y1), QPointF(rect.right(), y1))
+    p.end()
+    return QIcon(pm)
+
+
+def make_mermaid_icon():
+    pm = QPixmap(28, 28)
+    pm.fill(QColor(0, 0, 0, 0))
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor("#333333"))
+    pen.setWidth(2)
+    p.setPen(pen)
+    p.setBrush(QColor("#cbd5e1"))
+    p.drawRoundedRect(QRectF(3, 7, 9, 14), 3, 3)
+    p.drawRoundedRect(QRectF(16, 7, 9, 14), 3, 3)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawLine(QPointF(12, 14), QPointF(16, 14))
+    p.drawLine(QPointF(13, 11), QPointF(16, 14))
+    p.drawLine(QPointF(13, 17), QPointF(16, 14))
+    p.end()
+    return QIcon(pm)
+
 
 MARKDOWN_EXTENSIONS = ["fenced_code", "tables", "codehilite", "toc"]
 CODEHILITE_CONFIG = {
@@ -75,7 +106,21 @@ CODEHILITE_CONFIG = {
     }
 }
 
-PRE_LINE_HEIGHT_FIX = re.compile(r"line-height:\s*125%")
+_CODEHILITE_RE = re.compile(
+    r'<div class="codehilite"[^>]*><pre[^>]*><span></span><code>(.*?)</code></pre></div>',
+    re.DOTALL,
+)
+_MERMAID_FENCE_RE = re.compile(
+    r'<pre><code class="language-mermaid">(.*?)</code></pre>',
+    re.DOTALL,
+)
+
+
+def _preview_transform(m):
+    head = m.group(1).lstrip().split(None, 1)
+    if head and head[0] in MERMAID_HEADS:
+        return '<pre class="mermaid">' + m.group(1) + "</pre>"
+    return m.group(0)
 
 
 class MarkdownEditorWidget(QWidget):
@@ -88,8 +133,11 @@ class MarkdownEditorWidget(QWidget):
         self.editor = CodeEditor()
         self.highlighter = MarkdownHighlighter(self.editor.document())
 
-        self.preview = QTextBrowser()
-        self.preview.setOpenExternalLinks(True)
+        self.preview = QWebEngineView()
+        self._web_ready = False
+        self._pending_html = None
+        load_web_page(self.preview)
+        self.preview.loadFinished.connect(self._on_web_loaded)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(self.editor)
@@ -119,14 +167,30 @@ class MarkdownEditorWidget(QWidget):
         if preview:
             self.render_preview()
 
+    def _on_web_loaded(self, ok):
+        if ok:
+            self._web_ready = True
+            if self._pending_html is not None:
+                html = self._pending_html
+                self._pending_html = None
+                push_html(self.preview, html)
+
     def render_preview(self):
+        if not self.isVisible():
+            return
         html = markdown.markdown(
             self.editor.toPlainText(),
             extensions=MARKDOWN_EXTENSIONS,
             extension_configs=CODEHILITE_CONFIG,
         )
-        html = PRE_LINE_HEIGHT_FIX.sub("line-height: 100%", html)
-        self.preview.setHtml(STYLE_TEMPLATE.replace("__CONTENT__", html))
+        html = _CODEHILITE_RE.sub(_preview_transform, html)
+        html = _MERMAID_FENCE_RE.sub(
+            lambda m: '<pre class="mermaid">' + m.group(1) + "</pre>", html
+        )
+        if self._web_ready:
+            push_html(self.preview, html)
+        else:
+            self._pending_html = html
 
     def set_text(self, text):
         self.editor.blockSignals(True)
@@ -274,6 +338,16 @@ class MainWindow(QMainWindow):
         self.action_codeblock.setToolTip("Code Block")
         self.action_codeblock.triggered.connect(self._format_codeblock)
 
+        self.action_table = QAction("&Table", self)
+        self.action_table.setIcon(make_table_icon())
+        self.action_table.setToolTip("Table")
+        self.action_table.triggered.connect(self._format_table)
+
+        self.action_mermaid = QAction("&Mermaid...", self)
+        self.action_mermaid.setIcon(make_mermaid_icon())
+        self.action_mermaid.setToolTip("Mermaid Diagram Wizard")
+        self.action_mermaid.triggered.connect(self._format_mermaid)
+
         self.action_highlight = QAction("Syntax &Highlighting", self)
         self.action_highlight.setCheckable(True)
         self.action_highlight.setChecked(True)
@@ -300,6 +374,8 @@ class MainWindow(QMainWindow):
             self.action_numlist,
             self.action_quote,
             self.action_codeblock,
+            self.action_table,
+            self.action_mermaid,
         ]
 
     def _create_format_bar(self):
@@ -370,6 +446,8 @@ class MainWindow(QMainWindow):
         format_menu.addAction(self.action_numlist)
         format_menu.addAction(self.action_quote)
         format_menu.addAction(self.action_codeblock)
+        format_menu.addAction(self.action_table)
+        format_menu.addAction(self.action_mermaid)
 
     def set_mode(self, mode):
         self.mode_index = mode
@@ -441,6 +519,18 @@ class MainWindow(QMainWindow):
         editor = self.current_editor()
         if editor:
             editor.editor.insert_fence_block()
+
+    def _format_table(self):
+        editor = self.current_editor()
+        if editor:
+            editor.editor.insert_table()
+
+    def _format_mermaid(self):
+        dlg = MermaidWizardDialog(self)
+        if dlg.exec():
+            editor = self.current_editor()
+            if editor and dlg.generated_source:
+                editor.editor.insert_mermaid(dlg.generated_source)
 
     def _wrap_current(self, left, right=None):
         editor = self.current_editor()
@@ -578,6 +668,7 @@ def _basename(path):
 if __name__ == "__main__":
     from PyQt6.QtWidgets import QApplication
 
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName("Markdown Editor")
     win = MainWindow()
