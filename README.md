@@ -54,9 +54,21 @@ venv\Scripts\python -m pip install PyQt6 markdown Pygments
 venv\Scripts\python main.py
 ```
 
+## Build a standalone executable
+
+The project includes a PyInstaller spec (`MarkdownEditor.spec`) that produces a single windowed `MarkdownEditor.exe` (40 MB) with all Pygments lexers bundled so code highlighting keeps working in the frozen app.
+
+```powershell
+venv\Scripts\python -m pip install pyinstaller
+venv\Scripts\pyinstaller --noconfirm MarkdownEditor.spec
+```
+
+The executable is written to `dist\MarkdownEditor.exe`.
+
 ## Project layout
 
 | File                | Purpose                                             |
 |---------------------|-----------------------------------------------------|
 | `main.py`           | Application window, tabs, toolbar, menus, rendering |
 | `markdown_edit.py`  | `CodeEditor` widget and `MarkdownHighlighter`       |
+| `MarkdownEditor.spec` | PyInstaller build configuration                    |
