@@ -4,7 +4,7 @@ import re
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QPoint, QSize, QTimer, QUrl, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QPoint, QSize, QTimer, QUrl, Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygon
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -683,14 +683,6 @@ def mermaid_fragment(source):
     return '<pre class="mermaid">' + html.escape(source) + "</pre>"
 
 
-class MdbBridge(QObject):
-    editRequested = pyqtSignal(int, str)
-
-    @pyqtSlot(int, str)
-    def editMermaid(self, index, source):
-        self.editRequested.emit(index, source)
-
-
 _ARROW_STYLE = {
     "-->": ("solid", None, ">"),
     "---": ("solid", None, None),
@@ -1044,33 +1036,6 @@ class _StepListControl(QWidget):
 
     def row_count(self):
         return len(self._cards)
-
-
-class MermaidEditDialog(QDialog):
-    def __init__(self, source, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Edit Mermaid Diagram")
-        self.resize(640, 420)
-        layout = QVBoxLayout(self)
-        editor = QPlainTextEdit()
-        from PyQt6.QtGui import QFontDatabase
-
-        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        font.setPointSize(11)
-        editor.setFont(font)
-        editor.setPlainText(source)
-        layout.addWidget(editor, 1)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Save")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        self._editor = editor
-
-    def edited_source(self):
-        return self._editor.toPlainText()
 
 
 class MermaidWizardDialog(QDialog):

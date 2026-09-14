@@ -14,16 +14,6 @@ a { color: #0366d6; }
 h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
 </style>
 <script src="mermaid.min.js"></script>
-<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
-<script>
-  try {
-    if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined' && qt.webChannelTransport) {
-      new QWebChannel(qt.webChannelTransport, function (channel) {
-        window.mdBridge = channel.objects.bridge;
-      });
-    }
-  } catch (e) { console.error('bridge', e); }
-</script>
 <script>
   window.mermaidRender = function (html) {
     var el = document.getElementById('content');
@@ -31,10 +21,6 @@ h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
     try {
       mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', suppressErrorRendering: true });
       var nodes = el.querySelectorAll('pre.mermaid, code.language-mermaid, code.mermaid');
-      Array.prototype.forEach.call(nodes, function (n, i) {
-        n.dataset.diaIndex = String(i + 1);
-        n.dataset.src = n.textContent;
-      });
       var seq = window.mermaidRender.seq = (window.mermaidRender.seq || 0) + 1;
       var gen = window.mermaidRender.gen = (window.mermaidRender.gen || 0) + 1;
       var pending = nodes.length;
@@ -52,8 +38,6 @@ h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
           if (n.isConnected) {
             var holder = document.createElement('div');
             holder.id = id;
-            holder.dataset.diaIndex = n.dataset.diaIndex;
-            holder.dataset.src = src;
             holder.innerHTML = r.svg;
             n.replaceWith(holder);
           }
@@ -84,13 +68,6 @@ h1 { border-bottom: 1px solid #e1e4e8; padding-bottom: 4px; }
   } else {
     document.addEventListener('DOMContentLoaded', flushPending);
   }
-  document.addEventListener('dblclick', function (ev) {
-    if (!window.mdBridge || !ev.target || !ev.target.closest) return;
-    var h = ev.target.closest('[data-dia-index]');
-    if (h) {
-      window.mdBridge.editMermaid(Number(h.dataset.diaIndex), h.dataset.src || '');
-    }
-  });
 </script>
 </head>
 <body>

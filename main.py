@@ -20,7 +20,6 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QMainWindow,
-    QMessageBox,
     QSplitter,
     QStyle,
     QTabWidget,
@@ -28,14 +27,11 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from markdown_edit import CodeEditor, MarkdownHighlighter
 from mermaid_wizard import (
     MERMAID_HEADS,
-    MdbBridge,
-    MermaidEditDialog,
     MermaidWizardDialog,
     load_web_page,
     push_html,
@@ -140,11 +136,6 @@ class MarkdownEditorWidget(QWidget):
         self.preview = QWebEngineView()
         self._web_ready = False
         self._pending_html = None
-        self.bridge = MdbBridge()
-        channel = QWebChannel(self.preview.page())
-        self.preview.page().setWebChannel(channel)
-        channel.registerObject("bridge", self.bridge)
-        self.bridge.editRequested.connect(self._edit_mermaid)
         load_web_page(self.preview)
         self.preview.loadFinished.connect(self._on_web_loaded)
 
@@ -200,23 +191,6 @@ class MarkdownEditorWidget(QWidget):
             push_html(self.preview, html)
         else:
             self._pending_html = html
-
-    def _edit_mermaid(self, index, source):
-        dlg = MermaidWizardDialog(self)
-        if not dlg.set_source(source):
-            dlg = MermaidEditDialog(source, self)
-        if dlg.exec():
-            new_source = (
-                dlg.generated_source
-                if isinstance(dlg, MermaidWizardDialog)
-                else dlg.edited_source()
-            )
-            if new_source.strip() and not self.editor.replace_mermaid_diagram(index, new_source):
-                QMessageBox.warning(
-                    self,
-                    "Edit Mermaid",
-                    "Could not locate the diagram source to replace in the editor.",
-                )
 
     def set_text(self, text):
         self.editor.blockSignals(True)

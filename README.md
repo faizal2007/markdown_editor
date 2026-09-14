@@ -29,7 +29,6 @@ A lightweight Markdown editor built with **PyQt6**. It supports multiple open ta
   - Wizard for Flowchart, Sequence, Class, ER, Pie, and Gantt diagrams with a live preview while you build
   - ER diagrams support relationship rows plus per-entity attributes with PK / FK / UK keys
   - Generated source is inserted as a ```` ```mermaid ```` block in the editor
-  - **Double-click any rendered diagram in the preview to re-edit it** — it opens back in the wizard, pre-filled with its existing rows, and replaces the original block on OK
   - Diagrams render as live SVG in the preview; invalid diagrams stay as raw text (no error boxes)
 
 - **Rendered preview** (Chromium via QtWebEngine)
