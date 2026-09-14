@@ -4,18 +4,22 @@ import re
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QPoint, QSize, QTimer, QUrl, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QPolygon
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QScrollArea,
+    QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -77,7 +81,7 @@ def _shape_wrap(kind, label):
     if kind == "Cylinder":
         return "[(%s)]" % label
     if kind == "Circle":
-        return "(((%s)))" % label
+        return "((%s))" % label
     if kind == "Parallelogram":
         return "[/%s/]" % label
     return label
@@ -88,6 +92,8 @@ def gen_flowchart(options, rows):
     ids = {}
 
     def node(kind, label):
+        if kind == "None":
+            return label.strip()
         key = (kind, label.strip())
         if key not in ids:
             ids[key] = "n" + str(len(ids) + 1)
@@ -200,7 +206,7 @@ def gen_gantt(options, rows):
 
 
 _FC_WRAPS = [
-    ("(((", ")))", "Circle"),
+    ("((", "))", "Circle"),
     ("[(", ")]", "Cylinder"),
     ("[[", "]]", "Subroutine"),
     ("[/", "/]", "Parallelogram"),
@@ -214,10 +220,12 @@ _FC_WRAPS = [
 def _fc_shape_decode(text):
     text = text.strip()
     for pre, suf, kind in _FC_WRAPS:
-        if text.startswith(pre) and text.endswith(suf):
-            inner = text[len(pre) : len(text) - len(suf)]
-            if inner.strip():
-                return inner.strip(), kind
+        if text.endswith(suf):
+            i = text.rfind(pre)
+            if i >= 0:
+                inner = text[i + len(pre) : len(text) - len(suf)]
+                if inner.strip():
+                    return inner.strip(), kind
     return text, "None"
 
 
@@ -393,7 +401,7 @@ def _parse_er(lines):
                 t, _, label = rest.partition(":")
             else:
                 t, label = rest, ""
-            rel_rows.append([f, rel, t.strip(), label.strip().strip('"')])
+            rel_rows.append([f, rel, t.strip(), label.strip().strip('"').strip()])
             break
         i += 1
     return "ER", options, [rel_rows, attr_rows]
@@ -408,6 +416,9 @@ def _parse_pie(lines):
             parts = s.split(None, 2)
             if len(parts) >= 3 and parts[1].lower() == "title":
                 options["Title"] = parts[2]
+            continue
+        if s.lower().startswith("title "):
+            options["Title"] = s.split(None, 1)[1].strip()
             continue
         m = re.match(r'"([^"]+)"\s*:\s*(.*)', s)
         if m:
@@ -469,6 +480,17 @@ def parse_mermaid_wizard(source):
 SCHEMAS = {
     "Flowchart": {
         "options": [("Direction", "combo", ["TB", "LR", "BT", "RL"], "TB")],
+        "view": "flow",
+        "chain": (0, 4),
+        "add_label": "Add Step",
+        "card": [
+            ["text", 0, "From node"],
+            ["shape", 1, "From shape"],
+            ["arrow", 2, ""],
+            ["text", 3, "Edge label"],
+            ["text", 4, "To node"],
+            ["shape", 5, "To shape"],
+        ],
         "cols": [
             ("From", "text", ""),
             ("From shape", "shape", "Rectangle"),
@@ -486,6 +508,15 @@ SCHEMAS = {
     },
     "Sequence": {
         "options": [],
+        "view": "flow",
+        "chain": (0, 3),
+        "add_label": "Add Step",
+        "card": [
+            ["text", 0, "From"],
+            ["arrow", 1, ""],
+            ["text", 2, "Message"],
+            ["text", 3, "To"],
+        ],
         "cols": [
             ("From", "text", ""),
             ("Arrow", "seqarrow", "->>"),
@@ -501,6 +532,15 @@ SCHEMAS = {
     },
     "Class": {
         "options": [],
+        "view": "flow",
+        "chain": (0, 2),
+        "add_label": "Add Relation",
+        "card": [
+            ["text", 0, "From class"],
+            ["arrow", 1, ""],
+            ["text", 2, "To class"],
+            ["text", 3, "Label"],
+        ],
         "cols": [
             ("Class A", "text", ""),
             ("Relationship", "classrel", "<|--"),
@@ -519,6 +559,15 @@ SCHEMAS = {
         "tables": [
             {
                 "title": "Relationships",
+                "view": "flow",
+                "chain": (0, 2),
+                "add_label": "Add Relationship",
+                "card": [
+                    ["text", 0, "Entity A"],
+                    ["arrow", 1, ""],
+                    ["text", 2, "Entity B"],
+                    ["text", 3, "Label"],
+                ],
                 "cols": [
                     ("Entity A", "text", ""),
                     ("Relationship", "errel", "||--o{"),
@@ -533,6 +582,14 @@ SCHEMAS = {
             },
             {
                 "title": "Entity attributes",
+                "view": "flow",
+                "add_label": "Add Attribute",
+                "card": [
+                    ["text", 0, "Entity"],
+                    ["text", 1, "Attribute"],
+                    ["text", 2, "Type"],
+                    ["combo", 3, "Key"],
+                ],
                 "cols": [
                     ("Entity", "text", ""),
                     ("Attribute", "text", ""),
@@ -551,6 +608,12 @@ SCHEMAS = {
     },
     "Pie": {
         "options": [("Title", "text", None, "")],
+        "view": "flow",
+        "add_label": "Add Slice",
+        "card": [
+            ["text", 0, "Label"],
+            ["text", 1, "Value"],
+        ],
         "cols": [("Label", "text", ""), ("Value", "text", "")],
         "default_rows": 3,
         "example": [
@@ -564,6 +627,14 @@ SCHEMAS = {
         "options": [
             ("Title", "text", None, ""),
             ("Date format", "combo", ["YYYY-MM-DD", "MM-DD-YYYY", "DD-MM-YYYY"], "YYYY-MM-DD"),
+        ],
+        "view": "flow",
+        "add_label": "Add Task",
+        "card": [
+            ["text", 0, "Section"],
+            ["text", 1, "Task"],
+            ["text", 2, "Start"],
+            ["text", 3, "Duration"],
         ],
         "cols": [
             ("Section", "text", ""),
@@ -620,6 +691,361 @@ class MdbBridge(QObject):
         self.editRequested.emit(index, source)
 
 
+_ARROW_STYLE = {
+    "-->": ("solid", None, ">"),
+    "---": ("solid", None, None),
+    "-.->": ("dash", None, ">"),
+    "--x": ("solid", None, "x"),
+    "--o": ("solid", None, "o"),
+    "->>": ("solid", None, ">>"),
+    "->": ("solid", None, ">"),
+    "-)": ("solid", None, ")"),
+    "-->>": ("dash", None, ">>"),
+    "--)": ("dash", None, ")"),
+    "-x": ("solid", None, "x"),
+    "<|--": ("solid", "<|", None),
+    "<--": ("solid", "<", None),
+    "--*": ("solid", None, "*"),
+    "--": ("solid", None, None),
+    "o--": ("solid", "o", None),
+    "*--": ("solid", "*", None),
+    "..>": ("dash", None, ">"),
+}
+
+_ARROW_COLOR = QColor("#30506b")
+
+
+def _shape_icon(kind):
+    pm = QPixmap(26, 20)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    pen = QPen(_ARROW_COLOR)
+    pen.setWidth(2)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    if kind == "Rectangle":
+        p.drawRect(3, 3, 19, 14)
+    elif kind == "Rounded":
+        p.drawRoundedRect(3, 3, 19, 14, 4, 4)
+    elif kind == "Circle":
+        p.drawEllipse(5, 4, 16, 12)
+    elif kind == "Diamond":
+        p.drawPolygon(QPolygon([QPoint(13, 2), QPoint(22, 10), QPoint(13, 18), QPoint(4, 10)]))
+    elif kind == "Hexagon":
+        p.drawPolygon(QPolygon([QPoint(8, 3), QPoint(20, 3), QPoint(24, 10), QPoint(20, 17), QPoint(8, 17), QPoint(4, 10)]))
+    elif kind == "Subroutine":
+        p.drawRect(3, 3, 19, 14)
+        p.drawLine(8, 3, 8, 17)
+        p.drawLine(18, 3, 18, 17)
+    elif kind == "Cylinder":
+        p.drawEllipse(4, 2, 18, 5)
+        p.drawLine(4, 4, 4, 15)
+        p.drawLine(22, 4, 22, 15)
+        p.drawEllipse(4, 12, 18, 4)
+    elif kind == "Parallelogram":
+        p.drawPolygon(QPolygon([QPoint(2, 3), QPoint(15, 3), QPoint(22, 17), QPoint(9, 17)]))
+    else:
+        p.drawLine(6, 6, 20, 6)
+        p.drawLine(6, 14, 20, 14)
+    p.end()
+    return QIcon(pm)
+
+
+def _draw_er_icon(p, token):
+    left, _, right = token.partition("--")
+    cy = 9
+    x = 4
+    for ch in left:
+        if ch == "|":
+            p.drawLine(x, cy - 4, x, cy + 4)
+        elif ch == "o":
+            p.drawEllipse(x - 2, cy - 3, 6, 6)
+        elif ch == "}":
+            for dy in (-3, 0, 3):
+                p.drawLine(x, cy, x - 4, cy + dy)
+        x += 3
+    x = 38
+    for ch in reversed(right):
+        if ch == "|":
+            p.drawLine(x, cy - 4, x, cy + 4)
+        elif ch == "o":
+            p.drawEllipse(x - 2, cy - 3, 6, 6)
+        elif ch == "{":
+            for dy in (-3, 0, 3):
+                p.drawLine(x, cy, x + 4, cy + dy)
+        x -= 3
+
+
+def _arrow_icon(token):
+    pm = QPixmap(42, 18)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    pen = QPen(_ARROW_COLOR)
+    pen.setWidth(2)
+    cy = 9
+    if token in ER_RELS:
+        p.setPen(pen)
+        _draw_er_icon(p, token)
+        p.end()
+        return QIcon(pm)
+    style = _ARROW_STYLE.get(token)
+    if style is None:
+        p.setPen(QPen(QColor("#b0b0b0")))
+        p.drawText(3, 13, token)
+        p.end()
+        return QIcon(pm)
+    line_kind, left_head, right_head = style
+    x1, x2 = 4, 34
+    if left_head:
+        x1 = 13
+    if right_head:
+        x2 = 27
+    p.setPen(pen)
+    if line_kind == "dash":
+        p.setPen(QPen(_ARROW_COLOR, 2, Qt.PenStyle.DashLine))
+    p.drawLine(x1, cy, x2, cy)
+    p.setPen(pen)
+    if right_head == ">":
+        p.setBrush(Qt.BrushStyle.SolidPattern)
+        p.drawPolygon(QPolygon([QPoint(x2 - 1, cy), QPoint(x2 + 6, cy - 3), QPoint(x2 + 6, cy + 3)]))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+    elif right_head == ">>":
+        p.drawLine(x2, cy, x2 + 6, cy - 3)
+        p.drawLine(x2, cy, x2 + 6, cy + 3)
+    elif right_head == "o":
+        p.drawEllipse(x2 - 2, cy - 3, 6, 6)
+    elif right_head == "x":
+        p.drawLine(x2, cy - 3, x2 + 7, cy + 3)
+        p.drawLine(x2, cy + 3, x2 + 7, cy - 3)
+    elif right_head == ")":
+        p.drawEllipse(x2 - 2, cy - 5, 10, 10)
+    elif left_head == "<|":
+        p.setBrush(Qt.BrushStyle.SolidPattern)
+        p.drawPolygon(QPolygon([QPoint(x1 + 1, cy), QPoint(x1 - 6, cy - 3), QPoint(x1 - 6, cy + 3)]))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+    elif left_head == "<":
+        p.drawLine(x1, cy, x1 - 6, cy - 3)
+        p.drawLine(x1, cy, x1 - 6, cy + 3)
+    elif left_head == "o":
+        p.drawEllipse(x1 - 2, cy - 3, 6, 6)
+    elif left_head == "*":
+        p.setBrush(Qt.BrushStyle.SolidPattern)
+        p.drawPolygon(QPolygon([QPoint(x1, cy - 3), QPoint(x1 + 3, cy), QPoint(x1, cy + 3), QPoint(x1 - 3, cy)]))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+    p.end()
+    return QIcon(pm)
+
+
+class _StepCard(QWidget):
+    def __init__(self, control, values=None):
+        super().__init__()
+        if not isinstance(values, (list, tuple)):
+            values = []
+        self._control = control
+        spec = control._spec
+        self._cols = spec["cols"]
+        ncols = len(self._cols)
+        row = ((values + [""] * ncols)[:ncols])
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(6)
+        self._widgets = {}
+        self._text_fields = {}
+        index_label = QLabel("")
+        index_label.setFixedWidth(18)
+        lay.addWidget(index_label)
+        self._index_label = index_label
+        for kind, col, placeholder in control._card_spec:
+            label, _, default = (list(self._cols[col]) + ["", None, ""])[:3]
+            cur = row[col] if (values is not None or row[col]) else default
+            if kind == "shape":
+                combo = QComboBox()
+                combo.setIconSize(QSize(24, 18))
+                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+                for k in CHOICES["shape"]:
+                    combo.addItem(_shape_icon(k), k)
+                combo.setCurrentText(cur if cur else "Rectangle")
+                combo.currentIndexChanged.connect(control._notify)
+                combo.setToolTip(label)
+                lay.addWidget(combo)
+                self._widgets[col] = combo
+            elif kind == "arrow":
+                combo = QComboBox()
+                combo.setIconSize(QSize(40, 16))
+                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+                choices = CHOICES[self._cols[col][1]]
+                for tok in choices:
+                    combo.addItem(_arrow_icon(tok), tok)
+                combo.setCurrentText(cur if cur else (choices[0] if choices else ""))
+                combo.currentIndexChanged.connect(control._notify)
+                combo.setToolTip(label)
+                lay.addWidget(combo)
+                self._widgets[col] = combo
+            elif kind == "combo":
+                combo = QComboBox()
+                combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+                choices = CHOICES[self._cols[col][1]]
+                combo.addItems(choices)
+                combo.setCurrentText(cur if cur else (choices[0] if choices else ""))
+                combo.currentIndexChanged.connect(control._notify)
+                combo.setToolTip(label)
+                lay.addWidget(combo)
+                self._widgets[col] = combo
+            else:
+                le = QLineEdit(cur if cur else "")
+                ph = placeholder or label
+                le.setPlaceholderText(ph)
+                le.textChanged.connect(control._notify)
+                le.textChanged.connect(lambda _=False, e=le, p=ph: self._autosize(e, p))
+                lay.addWidget(le)
+                self._widgets[col] = le
+                self._text_fields[col] = le
+                self._autosize(le, ph)
+        chain = control._spec.get("chain")
+        if chain:
+            self._source_le = self._text_fields.get(chain[0])
+            self._target_le = self._text_fields.get(chain[1])
+        else:
+            text_cols = list(self._text_fields)
+            if text_cols:
+                self._source_le = self._text_fields[text_cols[0]]
+                self._target_le = self._text_fields[text_cols[-1]]
+            else:
+                self._source_le = self._target_le = None
+        lay.addStretch(1)
+        for symbol, tool, slot in (("▲", "Move up", lambda: control._move(self, -1)),
+                                   ("▼", "Move down", lambda: control._move(self, 1)),
+                                   ("✕", "Remove this step", lambda: control._remove(self))):
+            btn = QToolButton()
+            btn.setText(symbol)
+            btn.setAutoRaise(True)
+            btn.setFixedWidth(24)
+            btn.setToolTip(tool)
+            btn.clicked.connect(slot)
+            lay.addWidget(btn)
+
+    def _autosize(self, edit, placeholder):
+        fm = edit.fontMetrics()
+        text = edit.text() or placeholder or ""
+        w = fm.horizontalAdvance(text) + 26
+        w = max(40, min(w, 240))
+        edit.setMinimumWidth(w)
+        edit.setMaximumWidth(w)
+
+    def set_index(self, i, total):
+        self._index_label.setText(str(i + 1))
+
+    def collect(self, row):
+        for kind, col, _ph in self._control._card_spec:
+            w = self._widgets[col]
+            if kind == "text":
+                row[col] = w.text().strip()
+            else:
+                row[col] = w.currentText()
+
+
+class _StepListControl(QWidget):
+    def __init__(self, spec, on_change=None):
+        super().__init__()
+        self._spec = spec
+        self._card_spec = spec["card"]
+        self._ncols = len(spec["cols"])
+        self.on_change = on_change
+        self._cards = []
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(4)
+        header = QHBoxLayout()
+        add_btn = QPushButton(spec.get("add_label", "Add Step"))
+        add_btn.clicked.connect(self.add_card)
+        header.addWidget(add_btn)
+        self.chain_check = None
+        if spec.get("chain"):
+            self.chain_check = QCheckBox("Connect each step to the next")
+            self.chain_check.setChecked(True)
+            self.chain_check.toggled.connect(self._notify)
+            header.addWidget(self.chain_check)
+        header.addStretch(1)
+        root.addLayout(header)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        host = QWidget()
+        self._cards_lay = QVBoxLayout(host)
+        self._cards_lay.setContentsMargins(0, 0, 0, 0)
+        self._cards_lay.setSpacing(4)
+        scroll.setWidget(host)
+        root.addWidget(scroll, 1)
+
+    def _notify(self, *_):
+        if self.on_change:
+            self.on_change()
+
+    def add_card(self, values=None):
+        card = _StepCard(self, values)
+        if card._target_le:
+            card._target_le.editingFinished.connect(lambda c=card: self._chain_next(c))
+        self._cards.append(card)
+        self._cards_lay.addWidget(card)
+        self._refresh_indexes()
+        self._notify()
+        return card
+
+    def _remove(self, card):
+        if card in self._cards:
+            self._cards.remove(card)
+            self._cards_lay.removeWidget(card)
+            card.deleteLater()
+            self._refresh_indexes()
+            self._notify()
+
+    def _move(self, card, delta):
+        i = self._cards.index(card)
+        j = i + delta
+        if j < 0 or j >= len(self._cards):
+            return
+        self._cards[i], self._cards[j] = self._cards[j], self._cards[i]
+        self._cards_lay.removeWidget(self._cards[i])
+        self._cards_lay.removeWidget(self._cards[j])
+        self._cards_lay.insertWidget(i, self._cards[i])
+        self._cards_lay.insertWidget(j, self._cards[j])
+        self._refresh_indexes()
+
+    def _chain_next(self, card):
+        if not self.chain_check or not self.chain_check.isChecked():
+            return
+        i = self._cards.index(card)
+        if i + 1 >= len(self._cards):
+            return
+        nxt = self._cards[i + 1]
+        if nxt._source_le and not nxt._source_le.text().strip():
+            nxt._source_le.setText(card._target_le.text() if card._target_le else "")
+
+    def _refresh_indexes(self):
+        n = len(self._cards)
+        for i, card in enumerate(self._cards):
+            card.set_index(i, n)
+
+    def set_rows(self, rows):
+        for card in list(self._cards):
+            self._cards.remove(card)
+            self._cards_lay.removeWidget(card)
+            card.deleteLater()
+        for row in rows:
+            self.add_card(list(row))
+        self._refresh_indexes()
+
+    def collect_rows(self):
+        rows = []
+        for card in self._cards:
+            row = [""] * self._ncols
+            card.collect(row)
+            rows.append(row)
+        return rows
+
+    def row_count(self):
+        return len(self._cards)
+
+
 class MermaidEditDialog(QDialog):
     def __init__(self, source, parent=None):
         super().__init__(parent)
@@ -657,24 +1083,27 @@ class MermaidWizardDialog(QDialog):
 
         root = QVBoxLayout(self)
 
+        config_col = QVBoxLayout()
         top = QHBoxLayout()
         top.addWidget(QLabel("Diagram type:"))
         self.type_combo = QComboBox()
         self.type_combo.addItems(list(SCHEMAS.keys()))
         top.addWidget(self.type_combo, 1)
-        root.addLayout(top)
+        config_col.addLayout(top)
 
         self.options_box = QWidget()
         self.options_layout = QHBoxLayout(self.options_box)
         self.options_layout.setContentsMargins(0, 0, 0, 4)
-        root.addWidget(self.options_box)
+        config_col.addWidget(self.options_box)
 
         self.sections_box = QWidget()
         self.sections_layout = QVBoxLayout(self.sections_box)
         self.sections_layout.setContentsMargins(0, 0, 0, 0)
-        root.addWidget(self.sections_box, 1)
+        config_col.addWidget(self.sections_box, 1)
 
-        mid = QHBoxLayout()
+        self.config_widget = QWidget()
+        self.config_widget.setLayout(config_col)
+
         self.code_box = QPlainTextEdit()
         self.code_box.setReadOnly(True)
         self.code_box.setPlaceholderText("Generated mermaid source appears here...")
@@ -685,9 +1114,21 @@ class MermaidWizardDialog(QDialog):
         preview_col = QVBoxLayout()
         preview_col.addWidget(self.preview_view, 1)
         preview_col.addWidget(self.state_label)
-        mid.addWidget(self.code_box, 1)
-        mid.addLayout(preview_col, 2)
-        root.addLayout(mid, 2)
+        self.output_widget = QWidget()
+        self.output_widget.setLayout(preview_col)
+
+        self.right_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.right_splitter.addWidget(self.code_box)
+        self.right_splitter.addWidget(self.output_widget)
+        self.right_splitter.setSizes([180, 420])
+        self.right_splitter.setChildrenCollapsible(False)
+
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.addWidget(self.config_widget)
+        self.main_splitter.addWidget(self.right_splitter)
+        self.main_splitter.setSizes([400, 520])
+        self.main_splitter.setChildrenCollapsible(False)
+        root.addWidget(self.main_splitter, 1)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -752,37 +1193,23 @@ class MermaidWizardDialog(QDialog):
                 "cols": schema["cols"],
                 "default_rows": schema.get("default_rows", 2),
                 "example": schema.get("example") or [],
+                "view": schema.get("view"),
+                "card": schema.get("card"),
+                "chain": schema.get("chain"),
+                "add_label": schema.get("add_label"),
             }
         ]
         for tspec in tables:
             group = QGroupBox(tspec.get("title", ""))
             lay = QVBoxLayout(group)
-            tbl = QTableWidget()
-            tbl.verticalHeader().setVisible(False)
-            tbl.clear()
-            tbl.setColumnCount(len(tspec["cols"]))
-            tbl.setRowCount(0)
-            tbl.setHorizontalHeaderLabels([c[0] for c in tspec["cols"]])
-            tbl.itemChanged.connect(self._on_changed)
-            tbl.cellChanged.connect(self._on_changed)
-            hb = QHBoxLayout()
-            add_btn = QPushButton("Add Row")
-            remove_btn = QPushButton("Remove Row")
-            add_btn.clicked.connect(lambda _=False, t=tbl, s=tspec: self._add_row(t, s))
-            remove_btn.clicked.connect(lambda _=False, t=tbl: self._remove_row(t))
-            hb.addWidget(add_btn)
-            hb.addWidget(remove_btn)
-            hb.addStretch(1)
-            lay.addWidget(tbl)
-            lay.addLayout(hb)
-            self.sections_layout.addWidget(group)
             example = tspec.get("example") or []
             total_rows = max(tspec.get("default_rows", 2), len(example))
+            flow = _StepListControl(tspec, on_change=self._on_changed)
+            lay.addWidget(flow, 1)
+            self.sections_layout.addWidget(group, 1)
             for i in range(total_rows):
-                self._add_row(tbl, tspec, example[i] if i < len(example) else None)
-            tbl.resizeColumnsToContents()
-            self.sections.append({"table": tbl, "spec": tspec})
-        self.sections_layout.addStretch(1)
+                flow.add_card(example[i] if i < len(example) else None)
+            self.sections.append({"widget": flow, "spec": tspec})
         self._building = False
         self._render()
 
@@ -792,40 +1219,6 @@ class MermaidWizardDialog(QDialog):
         le = QLineEdit()
         le.textChanged.connect(self._on_changed)
         return le
-
-    def _add_row(self, table, spec, values=None):
-        row = table.rowCount()
-        table.insertRow(row)
-        for col, (_, kind, default) in enumerate(spec["cols"]):
-            val = values[col] if values and col < len(values) else default
-            if kind in CHOICES:
-                cb = QComboBox()
-                cb.addItems(CHOICES[kind])
-                cb.setCurrentText(val)
-                cb.currentIndexChanged.connect(self._on_changed)
-                table.setCellWidget(row, col, cb)
-            else:
-                item = QTableWidgetItem(val)
-                table.setItem(row, col, item)
-
-    def _remove_row(self, table):
-        if table.rowCount() > 1:
-            table.removeRow(table.currentRow() if table.currentRow() >= 0 else table.rowCount() - 1)
-            self._on_changed()
-
-    def _collect_rows(self, table):
-        rows = []
-        for r in range(table.rowCount()):
-            row = []
-            for c in range(table.columnCount()):
-                w = table.cellWidget(r, c)
-                if isinstance(w, QComboBox):
-                    row.append(w.currentText())
-                else:
-                    item = table.item(r, c)
-                    row.append(item.text() if item else "")
-            rows.append(row)
-        return rows
 
     def set_source(self, source):
         parsed = parse_mermaid_wizard(source)
@@ -844,15 +1237,13 @@ class MermaidWizardDialog(QDialog):
                 elif hasattr(w, "setText"):
                     w.setText(str(val))
         for sec, table_rows in zip(self.sections, rows_list):
-            tbl = sec["table"]
-            spec = sec["spec"]
-            while tbl.rowCount():
-                tbl.removeRow(tbl.rowCount() - 1)
-            for row_data in table_rows:
-                self._add_row(tbl, spec, row_data)
-            tbl.resizeColumnsToContents()
+            w = sec["widget"]
+            w.set_rows([list(r) for r in table_rows])
         self._on_changed()
         return True
+
+    def _section_rows(self, sec):
+        return sec["widget"].collect_rows()
 
     def build_mermaid(self):
         schema = self._current_schema()
@@ -862,7 +1253,7 @@ class MermaidWizardDialog(QDialog):
                 options[name] = w.currentText()
             else:
                 options[name] = w.text()
-        row_sets = [self._collect_rows(sec["table"]) for sec in self.sections]
+        row_sets = [self._section_rows(sec) for sec in self.sections]
         return schema["gen"](options, *row_sets)
 
     def _on_changed(self, *_):
